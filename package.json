@@ -1,0 +1,23 @@
+{
+  "name": "bluesky-court-bot",
+  "version": "1.0.0",
+  "description": "Bluesky bot that converts threads into Ace Attorney Conversations",
+  "main": "build/index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "tsc --project node_modules/objection-worker-builder/tsconfig.json && tsc"
+  },
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@atproto/api": "^0.20.25",
+    "mariadb": "^3.4.0",
+    "objection-worker-builder": "./objection-worker-builder",
+    "rxjs": "^7.8.2",
+    "typescript": "^5.7.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.0"
+  }
+}

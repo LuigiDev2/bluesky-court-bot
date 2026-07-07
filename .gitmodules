@@ -1,0 +1,3 @@
+[submodule "objection-worker-builder"]
+	path = objection-worker-builder
+	url = https://github.com/luigidev2/objection-worker-builder
