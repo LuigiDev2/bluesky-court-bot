@@ -1,0 +1,15 @@
+[Unit]
+Description=Bluesky Court bot
+After=network.target
+Wants=network-online.target
+
+[Service]
+Restart=always
+Type=simple
+ExecStart=node build/index.js
+WorkingDirectory=/home/courtbot/bluesky-court-bot
+User=courtbot
+Environment='BLUESKY_USERNAME=xxx' 'BLUESKY_PASSWORD=yyy'
+
+[Install]
+WantedBy=multi-user.target
