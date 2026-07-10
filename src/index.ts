@@ -46,10 +46,6 @@ async function mainLoop() {
 
     console.log("Notifications sucess");
 
-    const tmpBase = os.tmpdir();
-    const tmpDir = tmpBase.concat("/", randomUUID());
-    await fs.mkdir(tmpDir);
-
     // test value for cursor 1783186948495
     const neededNotifications = notis.data.notifications.filter(
       (not) => new Date(not.indexedAt).getTime() > cursor,
@@ -59,11 +55,19 @@ async function mainLoop() {
 
     for (const notification of neededNotifications) {
       await ConcurrencyCounter.acquireCounter();
+      const tmpBase = os.tmpdir();
+      const tmpDir = tmpBase.concat("/bluesky-court-bot/", randomUUID());
+      await fs.mkdir(tmpDir, { recursive: true });
       // This way processes are launched in paralel so we don't need to wait for each single one of them
       handleThread(agent, notification, tmpDir)
         .then(() => {})
         .catch(console.error)
-        .finally(() => ConcurrencyCounter.releaseCounter());
+        .finally(() => {
+          fs.rm(tmpDir, { force: true, maxRetries: 3, recursive: true })
+            .then(() => {})
+            .catch(console.error);
+          ConcurrencyCounter.releaseCounter();
+        });
     }
 
     if (!neededNotifications.length) {
@@ -161,7 +165,7 @@ async function handleThread(
           await wait(5000);
           try {
             await post(agent, data, notification, lastPost);
-          } catch(e) {
+          } catch (e) {
             console.error(e);
           }
         }
