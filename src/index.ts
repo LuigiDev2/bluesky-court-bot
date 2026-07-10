@@ -70,9 +70,7 @@ async function mainLoop() {
         });
     }
 
-    if (!neededNotifications.length) {
-      await wait(30000);
-    }
+    await wait(30000);
   }
 }
 
@@ -95,16 +93,15 @@ async function handleThread(
     while (currentPost != null) {
       if (currentPost.$type === "app.bsky.feed.defs#threadViewPost") {
         const typedPost = currentPost as AppBskyFeedDefs.ThreadViewPost;
-        let evidence: string | undefined = undefined;
+        let evidence: Comments["evidence"] | undefined = undefined;
         if (
           "embed" in typedPost.post.record &&
           (typedPost.post.record.embed as any).$type === "app.bsky.embed.images"
         ) {
           console.debug("Evidence detected");
-          const imageRef = (
-            (typedPost.post.record.embed as any)
-              ?.images?.[0] as AppBskyEmbedImages.Image
-          )?.image.ref;
+          const image = (typedPost.post.record.embed as any)
+            ?.images?.[0] as AppBskyEmbedImages.Image;
+          const imageRef = image?.image.ref;
           let imgArr: ArrayBufferLike | null = null;
           try {
             const imageBlobResponse = await fetch(
@@ -122,7 +119,11 @@ async function handleThread(
                 ".png",
               );
               await fs.writeFile(imageName, Buffer.from(imgArr));
-              evidence = imageName;
+              evidence = {
+                path: imageName,
+                title: `${typedPost.post.author.displayName}'s evidence`,
+                alt: image.alt?.replaceAll('"', "''"),
+              };
             } catch (e) {}
           }
         }
