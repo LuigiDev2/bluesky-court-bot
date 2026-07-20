@@ -148,7 +148,7 @@ async function handleThread(
       const videoPath = await work({
         comments: unrolledThread,
         tmpDir: tmpDir,
-        forceCodec: { codec: "libx264", extension: "mp4" },
+        forceCodec: { codec: "libx264", extension: "mp4", volume: "0.1"},
       });
       const video = await fs.readFile(videoPath);
       console.debug("Gotta Upload!");
