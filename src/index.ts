@@ -115,7 +115,7 @@ async function handleThread(
             try {
               const imageName = tmpDir.concat(
                 "/",
-                imageRef.code.toString(),
+                imageRef.toString(),
                 ".png",
               );
               await fs.writeFile(imageName, Buffer.from(imgArr));
