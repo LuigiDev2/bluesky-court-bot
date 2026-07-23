@@ -1,4 +1,3 @@
-import { CursorManager } from "./cursor-manager.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import { randomUUID } from "node:crypto";
