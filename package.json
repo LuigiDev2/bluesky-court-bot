@@ -11,7 +11,7 @@
   "license": "ISC",
   "type": "module",
   "dependencies": {
-    "@atproto/api": "^0.20.25",
+    "@skyware/bot": "^0.4.1",
     "mariadb": "^3.4.0",
     "objection-worker-builder": "./objection-worker-builder",
     "rxjs": "^7.8.2",

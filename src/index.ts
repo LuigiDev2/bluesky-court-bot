@@ -1,206 +1,149 @@
-import { $Typed, Agent, CredentialSession } from "@atproto/api";
 import { CursorManager } from "./cursor-manager.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import { randomUUID } from "node:crypto";
-import {
-  AppBskyNotificationListNotifications,
-  AppBskyFeedDefs,
-  AppBskyEmbedRecordWithMedia,
-  AppBskyEmbedImages,
-} from "@atproto/api";
 import { work } from "objection-worker-builder/build/index.js";
 import { ConcurrencyCounter } from "./semaphore.js";
 import { wait } from "objection-worker-builder/build/utils.js";
 import { Comments } from "objection-worker-builder";
+import { Bot, Post } from "@skyware/bot";
 
 // Create a Bluesky Agent
 // const agent = new BskyAgent({
 //   service: "https://bsky.social",
 // });
-const session = new CredentialSession(new URL("https://bsky.social"));
-let agent: Agent;
+const bot = new Bot({ emitChatEvents: true });
 
 async function init() {
-  await session.login({
+  await bot.login({
     identifier: process.env.BLUESKY_USERNAME!,
     password: process.env.BLUESKY_PASSWORD!,
   });
+  bot.on("mention", async (post) => {
+    await ConcurrencyCounter.acquireCounter();
+    const tmpDir = await getTmpDir();
+    // This way processes are launched in paralel so we don't need to wait for each single one of them
+    replyToMention(post, tmpDir)
+      .then(() => {})
+      .catch(console.error)
+      .finally(() => {
+        fs.rm(tmpDir, { force: true, maxRetries: 3, recursive: true })
+          .then(() => {})
+          .catch(console.error);
+        ConcurrencyCounter.releaseCounter();
+      });
+  });
 
-  agent = new Agent(session);
+  bot.on("message", async (msg) => {
+    console.log("Got the message!");
+    if (msg.embed?.uri) {
+      const post = await bot.getPost(msg.embed.uri, {
+        parentHeight: 100,
+        skipCache: true,
+      });
+      const conversation = await msg.getConversation();
+      if (post.author.did === bot.profile.did) {
+        console.log("Deletion Request!");
+        let currentPost = post.parent;
+        const authUsers = new Set<string>();
+        while (currentPost) {
+          authUsers.add(currentPost.author.did);
+          currentPost = currentPost.parent;
+        }
+        if (authUsers.has(msg.senderDid)) {
+          await post.delete();
+          if (conversation) {
+            await conversation.sendMessage({
+              text: "The post has been removed!",
+            });
+          }
+        } else if (conversation) {
+          await conversation.sendMessage({
+            text: "You can't ask for the removal of a post you're not featured in",
+          });
+        }
+      } else if (process.env.STATICS_PATH && process.env.EXTERNAL_URL_PATTERN) {
+        //TODO: Private Renders!
+      }
+    }
+  });
 }
 
-async function mainLoop() {
-  while (true) {
-    console.debug("Starting loop");
-    const cursor = CursorManager.getCursor();
-    CursorManager.saveCursor();
-    const notis = await agent.listNotifications({
-      reasons: ["mention"],
-      limit: 100,
+async function getTmpDir() {
+  const tmpBase = os.tmpdir();
+  const tmpDir = tmpBase.concat("/bluesky-court-bot/", randomUUID());
+  await fs.mkdir(tmpDir, { recursive: true });
+  return tmpDir;
+}
+
+async function replyToMention(ogPost: Post, tmpDir: string) {
+  const videoPath = await processThreadAndGetVideoPath(ogPost, tmpDir);
+  const video = await fs.readFile(videoPath);
+  console.debug("Gotta Post!");
+  try {
+    ogPost.reply({
+      text: `Hey! Here's your video. Please note that this bot is an very early stage. Errors are bound to happen. Things may not properly work. Please DM me for any issue you may have.\n\nIf any person featured in this video wants it removed just DM me this very same post`,
+      video: { data: new Blob([video.buffer], { type: "video/mp4" }) },
     });
-
-    if (!notis.success) {
-      await wait(10000);
-    }
-
-    console.log("Notifications sucess");
-
-    // test value for cursor 1783186948495
-    const neededNotifications = notis.data.notifications.filter(
-      (not) => new Date(not.indexedAt).getTime() > cursor,
-    );
-
-    console.debug("%d needed notifications", neededNotifications.length);
-
-    for (const notification of neededNotifications) {
-      await ConcurrencyCounter.acquireCounter();
-      const tmpBase = os.tmpdir();
-      const tmpDir = tmpBase.concat("/bluesky-court-bot/", randomUUID());
-      await fs.mkdir(tmpDir, { recursive: true });
-      // This way processes are launched in paralel so we don't need to wait for each single one of them
-      handleThread(agent, notification, tmpDir)
-        .then(() => {})
-        .catch(console.error)
-        .finally(() => {
-          fs.rm(tmpDir, { force: true, maxRetries: 3, recursive: true })
-            .then(() => {})
-            .catch(console.error);
-          ConcurrencyCounter.releaseCounter();
-        });
-    }
-
-    await wait(30000);
+  } catch (e) {
+    console.error(e);
   }
 }
 
-async function handleThread(
-  agent: Agent,
-  notification: AppBskyNotificationListNotifications.Notification,
-  tmpDir: string,
-) {
-  console.debug("Processng notification for", notification.author.handle);
-  const thread = await agent.getPostThread({
-    uri: notification.uri,
-    depth: 0,
-    parentHeight: 1000,
+async function processThreadAndGetVideoPath(ogPost: Post, tmpDir: string) {
+  console.debug("Processng notification for", ogPost.author.handle);
+  const unrolledThread: Comments[] = [];
+  let currentPost: Post | undefined | null = await ogPost.fetchParent({
+    parentHeight: 100,
+    force: true,
   });
-  if (thread.success) {
-    const unrolledThread: Comments[] = [];
-    let currentPost = (thread.data.thread as any)
-      .parent as typeof thread.data.thread;
-    let lastPost = currentPost;
-    while (currentPost != null) {
-      if (currentPost.$type === "app.bsky.feed.defs#threadViewPost") {
-        const typedPost = currentPost as AppBskyFeedDefs.ThreadViewPost;
-        let evidence: Comments["evidence"] | undefined = undefined;
-        if (
-          "embed" in typedPost.post.record &&
-          (typedPost.post.record.embed as any).$type === "app.bsky.embed.images"
-        ) {
-          console.debug("Evidence detected");
-          const image = (typedPost.post.record.embed as any)
-            ?.images?.[0] as AppBskyEmbedImages.Image;
-          const imageRef = image?.image.ref;
+  // let currentPost: Post | undefined = ogPost.parent;
+  while (currentPost != null) {
+    if (true) {
+      // Used to be use for checking removed posts, we'll see how it plays out now
+      let evidence: Comments["evidence"] | undefined = undefined;
+      if (currentPost.embed?.isImages()) {
+        console.debug("Evidence detected");
+        const image = currentPost.embed.images[0];
+        if (image.url) {
           let imgArr: ArrayBufferLike | null = null;
           try {
-            const imageBlobResponse = await fetch(
-              `https://cdn.bsky.app/img/feed_fullsize/plain/${typedPost.post.author.did}/${imageRef.toString()}@png`,
-            );
+            const imageBlobResponse = await fetch(image.url + "@png");
             imgArr = await imageBlobResponse.arrayBuffer();
           } catch (e) {
             console.error("AAAA");
           }
           if (imgArr) {
             try {
-              const imageName = tmpDir.concat(
-                "/",
-                imageRef.toString(),
-                ".png",
-              );
+              const imageName = tmpDir.concat("/", image.cid, ".png");
               await fs.writeFile(imageName, Buffer.from(imgArr));
               evidence = {
                 path: imageName,
-                title: `${typedPost.post.author.displayName}'s evidence`,
+                title: `${currentPost.author.displayName}'s evidence`,
                 alt: image.alt?.replaceAll('"', "''"),
               };
             } catch (e) {}
           }
         }
-        unrolledThread.unshift({
-          user: {
-            displayName: typedPost.post.author.displayName,
-            id: typedPost.post.author.did,
-          },
-          text: (typedPost.post.record as { text: string }).text,
-          evidence,
-        });
       }
-      if ((currentPost as any).post) {
-        lastPost = currentPost;
-      }
-      currentPost = (currentPost as any).parent as typeof currentPost;
-    }
-    if (!(lastPost as any).post) {
-      console.error("NO LAST POST");
-    } else {
-      console.debug("Gotta Render!");
-      const videoPath = await work({
-        comments: unrolledThread,
-        tmpDir: tmpDir,
-        forceCodec: { codec: "libx264", extension: "mp4", volume: "0.1"},
+      unrolledThread.unshift({
+        user: {
+          displayName: currentPost.author.displayName,
+          id: currentPost.author.did,
+        },
+        text: currentPost.text,
+        evidence,
       });
-      const video = await fs.readFile(videoPath);
-      console.debug("Gotta Upload!");
-      const { data } = await agent.uploadBlob(video);
-      await wait(10000);
-      console.debug("Gotta Post!");
-      // nested try catches because bluesky's API refuses to actually give out any meaningful errors
-      try {
-        await post(agent, data, notification, lastPost);
-      } catch (e) {
-        await wait(3000);
-        try {
-          await post(agent, data, notification, lastPost);
-        } catch (e) {
-          await wait(5000);
-          try {
-            await post(agent, data, notification, lastPost);
-          } catch (e) {
-            console.error(e);
-          }
-        }
-      }
     }
+    currentPost = currentPost?.parent;
   }
+  console.debug("Gotta Render!");
+  const videoPath = await work({
+    comments: unrolledThread,
+    tmpDir: tmpDir,
+    forceCodec: { codec: "libx264", extension: "mp4", volume: "0.1" },
+  });
+  return videoPath;
 }
 
-init().then(() => {
-  mainLoop().then();
-});
-async function post(
-  agent: Agent,
-  data: Awaited<ReturnType<Agent["uploadBlob"]>>["data"],
-  notification: AppBskyNotificationListNotifications.Notification,
-  lastPost:
-    | $Typed<AppBskyFeedDefs.ThreadViewPost>
-    | $Typed<AppBskyFeedDefs.NotFoundPost>
-    | $Typed<AppBskyFeedDefs.BlockedPost>
-    | { $type: string },
-) {
-  await agent.post({
-    text: `Hey! Here's your video. Please note that this bot is an very early stage. Errors are bound to happen. Things may not properly work. Please DM me for any issue you may have.`,
-    embed: {
-      $type: "app.bsky.embed.video",
-      video: data.blob,
-    },
-    createdAt: new Date().toISOString(),
-    reply: {
-      parent: { cid: notification.cid, uri: notification.uri },
-      root: {
-        uri: (lastPost as any).post.uri,
-        cid: (lastPost as any).post.cid,
-      },
-    },
-  });
-}
+init().then(() => {});
