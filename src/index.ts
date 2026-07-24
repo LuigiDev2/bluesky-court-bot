@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import { randomUUID } from "node:crypto";
-import { work } from "objection-worker-builder/build/index.js";
+import { EngineJob, work } from "objection-worker-builder/build/index.js";
 import { ConcurrencyCounter } from "./semaphore.js";
 import { wait } from "objection-worker-builder/build/utils.js";
 import { Comments } from "objection-worker-builder";
@@ -61,8 +61,17 @@ async function init() {
             text: "You can't ask for the removal of a post you're not featured in",
           });
         }
-      } else if (process.env.STATICS_PATH && process.env.EXTERNAL_URL_PATTERN) {
-        //TODO: Private Renders!
+      } else if (process.env.STATICS_PATH && process.env.EXTERNAL_URL_PREFIX) {
+        const video = await processThreadAndGetVideoPath(
+          post,
+          await getTmpDir(),
+          { codec: "copy", extension: "avi", volume: "0.1" },
+        );
+        const fileName = `${post.cid}.avi`;
+        await fs.rename(video, `${process.env.STATICS_PATH}/${fileName}`);
+        await conversation?.sendMessage({
+          text: `Your render should be available at ${process.env.EXTERNAL_URL_PREFIX}/${fileName}. It will be removed in ~24 hours`,
+        });
       }
     }
   });
@@ -76,26 +85,38 @@ async function getTmpDir() {
 }
 
 async function replyToMention(ogPost: Post, tmpDir: string) {
-  const videoPath = await processThreadAndGetVideoPath(ogPost, tmpDir);
-  const video = await fs.readFile(videoPath);
-  console.debug("Gotta Post!");
-  try {
-    ogPost.reply({
-      text: `Hey! Here's your video. Please note that this bot is an very early stage. Errors are bound to happen. Things may not properly work. Please DM me for any issue you may have.\n\nIf any person featured in this video wants it removed just DM me this very same post`,
-      video: { data: new Blob([video.buffer], { type: "video/mp4" }) },
-    });
-  } catch (e) {
-    console.error(e);
-  }
-}
-
-async function processThreadAndGetVideoPath(ogPost: Post, tmpDir: string) {
   console.debug("Processng notification for", ogPost.author.handle);
-  const unrolledThread: Comments[] = [];
-  let currentPost: Post | undefined | null = await ogPost.fetchParent({
+  const parent = await ogPost.fetchParent({
     parentHeight: 100,
     force: true,
   });
+  if (parent) {
+    const videoPath = await processThreadAndGetVideoPath(parent, tmpDir, {
+      codec: "libx264",
+      extension: "mp4",
+      volume: "0.1",
+    });
+    const video = await fs.readFile(videoPath);
+    console.debug("Gotta Post!");
+    try {
+      ogPost.reply({
+        text: `Hey! Here's your video. Please note that this bot is an very early stage. Errors are bound to happen. Things may not properly work. Please DM me for any issue you may have.\n\nIf any person featured in this video wants it removed just DM me this very same post`,
+        video: { data: new Blob([video.buffer], { type: "video/mp4" }) },
+      });
+    } catch (e) {
+      console.error(e);
+    }
+  }
+}
+
+async function processThreadAndGetVideoPath(
+  firstPost: Post,
+  tmpDir: string,
+  codecInfo: EngineJob["forceCodec"],
+) {
+  const unrolledThread: Comments[] = [];
+  // If grandparent is present we have already
+  let currentPost: Post | undefined | null = firstPost;
   // let currentPost: Post | undefined = ogPost.parent;
   while (currentPost != null) {
     if (true) {
@@ -140,7 +161,7 @@ async function processThreadAndGetVideoPath(ogPost: Post, tmpDir: string) {
   const videoPath = await work({
     comments: unrolledThread,
     tmpDir: tmpDir,
-    forceCodec: { codec: "libx264", extension: "mp4", volume: "0.1" },
+    forceCodec: codecInfo,
   });
   return videoPath;
 }
