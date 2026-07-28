@@ -23,11 +23,11 @@ async function init() {
     const tmpDir = await getTmpDir();
     // This way processes are launched in paralel so we don't need to wait for each single one of them
     replyToMention(post, tmpDir)
-      .then(() => {})
+      .then(() => { })
       .catch(console.error)
       .finally(() => {
         fs.rm(tmpDir, { force: true, maxRetries: 3, recursive: true })
-          .then(() => {})
+          .then(() => { })
           .catch(console.error);
         ConcurrencyCounter.releaseCounter();
       });
@@ -68,7 +68,13 @@ async function init() {
           { codec: "copy", extension: "avi", volume: "0.1" },
         );
         const fileName = `${post.cid}.avi`;
-        await fs.rename(video, `${process.env.STATICS_PATH}/${fileName}`);
+        const finalVideoDest = `${process.env.STATICS_PATH}/${fileName}`;
+        try {
+          await fs.rename(video, finalVideoDest);
+        } catch (e) {
+          // May fail if /tmp is another drive
+          await fs.copyFile(video, finalVideoDest);
+        }
         await conversation?.sendMessage({
           text: `Your render should be available at ${process.env.EXTERNAL_URL_PREFIX}/${fileName}. It will be removed in ~24 hours`,
         });
@@ -142,7 +148,7 @@ async function processThreadAndGetVideoPath(
                 title: `${currentPost.author.displayName}'s evidence`,
                 alt: image.alt?.replaceAll('"', "''"),
               };
-            } catch (e) {}
+            } catch (e) { }
           }
         }
       }
@@ -166,4 +172,4 @@ async function processThreadAndGetVideoPath(
   return videoPath;
 }
 
-init().then(() => {});
+init().then(() => { });
